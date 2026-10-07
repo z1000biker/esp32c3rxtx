@@ -6,7 +6,9 @@ RX : firmware streams IQF1 frames (128 x int16 I/Q); all DSP is done here:
      BFO shift -> boxcar decimation to ~16 kHz -> complex FIR channel filter ->
      AM / FM / USB / LSB / CW demod -> AGC -> squelch -> sound card.
 TX : firmware command  TX <AM|FM|USB|LSB> <amp> <param>  then 32 kS/s int16 PCM.
-     Sources: microphone, tone, carrier. Half duplex (RX is stopped for TX).
+     Sources: microphone, tone, carrier, waterfall text. Half duplex (RX is stopped for TX).
+WF text: the message is rendered to a bitmap and sent in USB/LSB as a set of tones,
+     one tone per pixel, one pixel line per time slice, so it is painted on any waterfall.
 
 Install (Windows PowerShell):
     py -m pip install pyside6 pyqtgraph numpy pyserial sounddevice
@@ -14,10 +16,10 @@ Run:
     py c3trx_app.py            (pick the port in the window)
     py c3trx_app.py --mock     (no hardware: simulated +1 kHz carrier, for testing)
 """
-import sys, time, struct, threading, queue, argparse, math
+import sys, time, struct, threading, queue, argparse, math, wave
 import numpy as np
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
 
 try:
@@ -43,8 +45,11 @@ class MockSerial:
     def __init__(self):
         self.out = bytearray(); self.lock = threading.Lock()
         self.rx = False; self.ph = 0.0; self.t = time.time(); self.is_open = True
+        self.tx = False; self.tx_n = 0; self.tx_last = 0.0
     def write(self, b):
         b = bytes(b)
+        if self.tx and b != b"\x03" and not b[:4] in (b"INFO", b"FREQ", b"RX 1", b"TX U", b"TX L", b"TX A", b"TX F"):   # PCM while transmitting
+            self.tx_n += len(b)//2; self.tx_last = time.time(); return len(b)
         if b == b"\x03":
             self.rx = False; self._put(b"RXEND\r\n"); return len(b)
         for line in b.decode(errors="ignore").split("\n"):
@@ -52,11 +57,15 @@ class MockSerial:
             if line == "INFO": self._put(b"C3TRX 1 RXIQ TXAM TXFM TXUSB TXLSB FREQ=2400000 (MOCK)\r\n")
             elif line.startswith("FREQ "): self._put(f"OK FREQ {line[5:]}\r\n".encode())
             elif line.startswith("RX "): self._put(b"RXREADY 128 2400000\r\n"); self.rx = True; self.t = time.time()
-            elif line.startswith("TX "): self._put(f"TXREADY {line.split()[1]} 2400000 32000\r\n".encode())
+            elif line.startswith("TX "):
+                self._put(f"TXREADY {line.split()[1]} 2400000 32000\r\n".encode())
+                self.tx = True; self.tx_n = 0; self.tx_last = time.time()
         return len(b)
     def _put(self, b):
         with self.lock: self.out += b
     def read(self, n):
+        if self.tx and time.time() - self.tx_last > 0.3:         # like the firmware: end TX on silence
+            self.tx = False; self._put(f"TXEND samples={self.tx_n} underruns=0\r\n".encode())
         if self.rx:
             now = time.time(); nfr = int((now - self.t) * 48000 / 128); self.t += nfr * 128 / 48000
             for _ in range(min(nfr, 50)):
@@ -223,10 +232,96 @@ class AudioOut:
             n = min(frames, len(self.buf)); out[:n, 0] = self.buf[:n]; out[n:, 0] = 0; self.buf = self.buf[n:]
 
 
+# --------------------------------------------------------------------------- waterfall text
+class WaterfallText:
+    """Paints text on a waterfall. The text is rendered to a 1-bit bitmap; every time slice sends one
+    line of pixels, and every lit pixel is a sine at  base + k*spacing  Hz (USB: RF = carrier + audio)."""
+
+    @staticmethod
+    def bitmap(text, height_px, bold=True):
+        f = QtGui.QFont(); f.setPixelSize(max(4, int(height_px))); f.setBold(bold)
+        f.setStyleStrategy(QtGui.QFont.NoAntialias)
+        fm = QtGui.QFontMetrics(f)
+        w = max(1, fm.horizontalAdvance(text) + 4); h = fm.height() + 2
+        img = QtGui.QImage(w, h, QtGui.QImage.Format_Grayscale8); img.fill(0)
+        p = QtGui.QPainter(img); p.setFont(f); p.setPen(QtGui.QColor(255, 255, 255))
+        p.setRenderHint(QtGui.QPainter.TextAntialiasing, False); p.drawText(2, 1 + fm.ascent(), text); p.end()
+        a = np.frombuffer(img.constBits(), np.uint8, count=img.bytesPerLine()*h).reshape(h, img.bytesPerLine())[:, :w] > 127
+        rows = np.where(a.any(axis=1))[0]; cols = np.where(a.any(axis=0))[0]
+        if len(rows) == 0: return np.zeros((1, 1), bool)
+        return a[rows[0]:rows[-1]+1, cols[0]:cols[-1]+1]
+
+    @staticmethod
+    def frames(bm, layout, newest_top=True, lsb=False):
+        """-> bool matrix (slices in transmit order, tones low->high audio frequency)."""
+        if layout == "vertical":        # text runs along time: narrow (font height) and long
+            F = bm.T                     # one slice per bitmap column, left to right
+            if not newest_top: F = F[:, ::-1]
+        else:                            # text runs along frequency: wide and short
+            F = bm[::-1] if newest_top else bm      # bottom line first so the top line ends up on top
+        return F[:, ::-1] if lsb else F            # LSB mirrors audio in RF: undo it
+
+    @staticmethod
+    def synth(F, sr, base, spacing, slice_s, lead_s=0.15):
+        n_sl, n_t = F.shape; L = max(1, int(round(slice_s*sr))); lead = int(lead_s*sr)
+        N = lead + n_sl*L + lead; t = np.arange(N)/sr; out = np.zeros(N)
+        r = max(1, int(min(0.010, 0.15*slice_s)*sr)); ker = np.hanning(2*r+1); ker /= ker.sum()   # soft keying, less splatter
+        rng = np.random.default_rng(7)                                            # spread tone phases
+        for k in range(n_t):
+            col = F[:, k]
+            if not col.any(): continue
+            env = np.zeros(N); env[lead:lead+n_sl*L] = np.repeat(col.astype(float), L)
+            env = np.convolve(env, ker, mode="same")
+            out += env*np.sin(2*np.pi*(base + k*spacing)*t + rng.uniform(0, 2*np.pi))
+        pk = float(np.max(np.abs(out))) or 1.0
+        return (0.9*out/pk).astype(np.float32)
+
+    @classmethod
+    def build(cls, text, layout, height_px, base, spacing, slice_ms, newest_top=True, lsb=False, sr=None):
+        sr = sr or TX_SR
+        bm = cls.bitmap(text, height_px); F = cls.frames(bm, layout, newest_top, lsb)
+        a = cls.synth(F, sr, base, spacing, slice_ms/1000.0)
+        info = dict(tones=F.shape[1], slices=F.shape[0], lo=base, hi=base + (F.shape[1]-1)*spacing,
+                    seconds=len(a)/sr, bitmap=bm)
+        return a, info
+
+
+class WfPreview(QtWidgets.QDialog):
+    """Spectrogram of the generated audio, drawn the way a waterfall will show it at the end of TX."""
+    def __init__(self, parent, audio, sr, info, newest_top):
+        super().__init__(parent); self.setWindowTitle("Waterfall text preview"); self.resize(720, 560)
+        v = QtWidgets.QVBoxLayout(self)
+        v.addWidget(QtWidgets.QLabel(f"{info['tones']} tones · {info['lo']:.0f}–{info['hi']:.0f} Hz audio "
+                                     f"({info['hi']-info['lo']:.0f} Hz wide) · {info['seconds']:.1f} s"))
+        sp = max(1.0, (info['hi'] - info['lo'])/max(1, info['tones']-1)) if info['tones'] > 1 else 100.0
+        n = 1 << int(round(math.log2(max(128, sr/sp)))); hop = max(16, n//4)       # ~1 FFT bin per pixel
+        win = np.hanning(n).astype(np.float32); frames = []
+        for i in range(0, max(1, len(audio) - n), hop):
+            frames.append(20*np.log10(np.abs(np.fft.rfft(audio[i:i+n]*win)) + 1e-6))
+        S = np.array(frames); fr = np.fft.rfftfreq(n, 1/sr)
+        lo = max(0, info['lo'] - 3*sp); hi = info['hi'] + 3*sp; sel = (fr >= lo) & (fr <= hi)
+        S = S[:, sel]
+        if newest_top: S = S[::-1]
+        pw = pg.PlotWidget(); pw.invertY(True); pw.setLabel("bottom", "audio Hz"); pw.hideAxis("left")
+        img = pg.ImageItem(S.T); img.setLookupTable(pg.colormap.get("turbo").getLookupTable(nPts=256))
+        top = float(S.max()); img.setLevels((top - 30, top))
+        # square pixels: one text line (time) is drawn as tall as one pixel step (Hz) is wide
+        T = len(audio)/sr; d = max(1e-3, (T - 0.3)/max(1, info['slices'])); h = T/d*sp
+        img.setRect(QtCore.QRectF(fr[sel][0], 0, fr[sel][-1] - fr[sel][0], h)); pw.addItem(img)
+        pw.setAspectLocked(True); pw.setXRange(fr[sel][0], fr[sel][-1], padding=0); pw.setYRange(0, h, padding=0)
+        v.addWidget(pw); self.plot = pw
+        ratio = (fr[sel][-1] - fr[sel][0])/h
+        self.resize(*((max(360, int(820*ratio) + 60), 860) if ratio < 1 else (960, max(320, int(900/ratio) + 140))))
+        note = QtWidgets.QLabel("Shown with square pixels. On a real waterfall the shape depends on its FFT size and "
+                                     "scroll speed: adjust Pixel (Hz) and Line (ms) until the text looks right there.")
+        note.setWordWrap(True); v.addWidget(note)
+
+
 # --------------------------------------------------------------------------- TX
 class TxFeeder:
-    def __init__(self, link, source, tone_hz):
+    def __init__(self, link, source, tone_hz, samples=None):
         self.link = link; self.source = source; self.tone = tone_hz; self.run = True
+        self.samples = samples; self.pos = 0
         self.q = queue.Queue(); self.mic = None
         if source == "mic" and sd:
             self.mic = sd.InputStream(samplerate=TX_SR, channels=1, dtype="float32", blocksize=640,
@@ -243,7 +338,10 @@ class TxFeeder:
                 due = int((time.time()-t0)*TX_SR) + 2560 - sent
                 if due <= 0: time.sleep(0.01); continue
                 n = min(due, 4096)
-                if self.source == "tone":
+                if self.source == "text":
+                    a = self.samples[self.pos:self.pos+n]; self.pos += len(a)
+                    if len(a) == 0: self.run = False; break      # message done: firmware ends TX on silence
+                elif self.source == "tone":
                     p = ph + 2*np.pi*self.tone/TX_SR*np.arange(n); ph = (p[-1] + 2*np.pi*self.tone/TX_SR) % (2*np.pi)
                     a = 0.5*np.sin(p)
                 else: a = np.zeros(n)
@@ -279,7 +377,7 @@ class Main(QtWidgets.QMainWindow):
         self.freq = W.QDoubleSpinBox(); self.freq.setRange(2300, 2500); self.freq.setDecimals(3); self.freq.setValue(2400.0); self.freq.setSuffix(" MHz")
         r2.addWidget(W.QLabel("Freq")); r2.addWidget(self.freq)
         bt = W.QPushButton("Tune"); bt.clicked.connect(self._tune); r2.addWidget(bt)
-        self.wsp = W.QSpinBox(); self.wsp.setRange(16, 4096); self.wsp.setValue(128); r2.addWidget(W.QLabel("RX window")); r2.addWidget(self.wsp)
+        self.wsp = W.QSpinBox(); self.wsp.setRange(32, 4096); self.wsp.setValue(128); r2.addWidget(W.QLabel("RX window")); r2.addWidget(self.wsp)
         self.brx = W.QPushButton("Start RX"); self.brx.clicked.connect(self._rx_toggle); r2.addWidget(self.brx)
         self.mgrp = W.QButtonGroup(self)
         for m in ["AM", "FM", "USB", "LSB", "CW"]:
@@ -336,7 +434,7 @@ class Main(QtWidgets.QMainWindow):
 
         r4 = W.QHBoxLayout(); v.addLayout(r4)
         self.txmode = W.QComboBox(); self.txmode.addItems(["USB", "LSB", "AM", "FM"])
-        self.txsrc = W.QComboBox(); self.txsrc.addItems(["mic", "tone", "carrier"])
+        self.txsrc = W.QComboBox(); self.txsrc.addItems(["mic", "tone", "carrier", "text"])
         self.amp = W.QSpinBox(); self.amp.setRange(1, 480); self.amp.setValue(80)
         self.depth = W.QSpinBox(); self.depth.setRange(1, 95); self.depth.setValue(70)
         self.dev = W.QSpinBox(); self.dev.setRange(100, 12000); self.dev.setValue(2500)
@@ -345,8 +443,28 @@ class Main(QtWidgets.QMainWindow):
             r4.addWidget(W.QLabel(lab)); r4.addWidget(w)
         self.bptt = W.QPushButton("PTT  (TX)"); self.bptt.setStyleSheet("background:#c0392b;color:white;font-weight:bold;padding:6px 18px")
         self.bptt.clicked.connect(self._ptt); r4.addWidget(self.bptt); r4.addStretch()
+
+        # waterfall text row
+        r5 = W.QHBoxLayout(); v.addLayout(r5)
+        self.wtext = W.QLineEdit("CQ CQ DE SV1EEX"); self.wtext.setMinimumWidth(220)
+        self.wlay = W.QComboBox(); self.wlay.addItems(["vertical (narrow)", "horizontal (wide)"])
+        self.wh = W.QSpinBox(); self.wh.setRange(6, 40); self.wh.setValue(12); self.wh.setSuffix(" px")
+        self.wpx = W.QSpinBox(); self.wpx.setRange(20, 1000); self.wpx.setSingleStep(10); self.wpx.setValue(150); self.wpx.setSuffix(" Hz")
+        self.wms = W.QSpinBox(); self.wms.setRange(10, 1000); self.wms.setSingleStep(10); self.wms.setValue(80); self.wms.setSuffix(" ms")
+        self.wbase = W.QSpinBox(); self.wbase.setRange(100, 10000); self.wbase.setSingleStep(50); self.wbase.setValue(400); self.wbase.setSuffix(" Hz")
+        self.wdir = W.QComboBox(); self.wdir.addItems(["newest on top", "newest at bottom"])
+        for lab, w in [("WF text", self.wtext), ("Layout", self.wlay), ("Height", self.wh), ("Pixel", self.wpx),
+                       ("Line", self.wms), ("Base", self.wbase), ("RX waterfall", self.wdir)]:
+            r5.addWidget(W.QLabel(lab)); r5.addWidget(w)
+        bp = W.QPushButton("Preview"); bp.clicked.connect(self._wf_preview); r5.addWidget(bp)
+        bs = W.QPushButton("Save WAV"); bs.clicked.connect(self._wf_wav); r5.addWidget(bs)
+        self.lwf = W.QLabel(""); r5.addWidget(self.lwf); r5.addStretch()
+        for w in (self.wh, self.wpx, self.wms, self.wbase): w.valueChanged.connect(self._wf_info)
+        for w in (self.wlay, self.wdir): w.currentIndexChanged.connect(self._wf_info)
+        self.wtext.textChanged.connect(self._wf_info); self.txmode.currentTextChanged.connect(self._wf_info)
         self.log = W.QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumHeight(130); v.addWidget(self.log)
         if not sd: self._log("! sounddevice not installed: no audio")
+        self._wf_info()
 
     # ---- helpers
     def _log(self, s): self.log.appendPlainText(time.strftime("%H:%M:%S ") + s)
@@ -413,19 +531,50 @@ class Main(QtWidgets.QMainWindow):
         self.dem.mode = m; self.bfo.setValue(MODE_BFO[m]); self.bw.setValue(MODE_BW[m]); self.dem.reset()
         if m in ("AM", "FM", "USB", "LSB"): self.txmode.setCurrentText(m)
         self._log(f"mode -> {m} (live)")
+    # ---- waterfall text
+    def _wf_build(self, sr=None):
+        m = self.txmode.currentText()
+        return WaterfallText.build(self.wtext.text() or " ", "vertical" if self.wlay.currentIndex() == 0 else "horizontal",
+                                   self.wh.value(), self.wbase.value(), self.wpx.value(), self.wms.value(),
+                                   newest_top=self.wdir.currentIndex() == 0, lsb=(m == "LSB"), sr=sr)
+    def _wf_info(self, *_):
+        if not hasattr(self, "lwf"): return
+        bm = WaterfallText.bitmap(self.wtext.text() or " ", self.wh.value())
+        vert = self.wlay.currentIndex() == 0
+        tones, sl = (bm.shape[0], bm.shape[1]) if vert else (bm.shape[1], bm.shape[0])
+        lo = self.wbase.value(); hi = lo + (tones - 1)*self.wpx.value()
+        warn = "  ⚠ above 15 kHz" if hi > 15000 else ("  (wider than an SSB channel)" if hi > 3000 else "")
+        self.lwf.setText(f"{tones} tones · {lo}–{hi} Hz · {sl*self.wms.value()/1000 + 0.3:.1f} s{warn}")
+    def _wf_preview(self):
+        a, info = self._wf_build()
+        self._wfdlg = WfPreview(self, a, TX_SR, info, self.wdir.currentIndex() == 0); self._wfdlg.show()
+    def _wf_wav(self):
+        fn, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save waterfall text audio", "wftext.wav", "WAV (*.wav)")
+        if not fn: return
+        a, info = self._wf_build(sr=48000)
+        with wave.open(fn, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes((a*32767).astype("<i2").tobytes())
+        self._log(f"saved {fn}: {info['seconds']:.1f} s, 48 kHz — play it into any SSB transmitter")
+
     def _ptt(self):
         if not self.link: return
         if self.tx: self.tx.stop(); self.tx = None; self._log("TX: audio stopped, firmware ends TX after 0.3 s"); return
         if self.rx: self.link.send(b"\x03"); time.sleep(0.3)
         src = self.txsrc.currentText(); m = self.txmode.currentText()
         if src == "carrier" and m in ("USB", "LSB"): m = "AM"; self.txmode.setCurrentText("AM"); self._log("carrier test -> AM (SSB with no audio radiates nothing)")
+        samples = None
+        if src == "text":
+            if m not in ("USB", "LSB"): m = "USB"; self.txmode.setCurrentText("USB"); self._log("waterfall text -> USB (AM/FM would smear the picture)")
+            samples, info = self._wf_build()
+            if info["hi"] > 15000: self._log("! waterfall text: top tone above 15 kHz, reduce Pixel/Height/Base"); return
+            self._log(f"WF text: {info['tones']} tones {info['lo']:.0f}–{info['hi']:.0f} Hz, {info['seconds']:.1f} s")
         p = self.depth.value() if m == "AM" else self.dev.value() if m == "FM" else 0
         txf = self._cf() + self.dem.vfo/1e6                      # transmit on the VFO frequency
         if txf > 2450: self._log("! TX limited to 2300–2450 MHz by firmware"); return
         self.link.send_line(f"FREQ {round(txf*1000)}"); time.sleep(0.05)
         self.link.send_line(f"TX {m} {self.amp.value()} {p}")
         self._log(f"TX on {txf:.5f} MHz (VFO). Μετά το TX πάτα Start RX.")
-        self.tx = TxFeeder(self.link, src, self.tone.value())
+        self.tx = TxFeeder(self.link, src, self.tone.value(), samples)
         self.bptt.setText("STOP TX"); self.bptt.setStyleSheet("background:#ff2d2d;color:white;font-weight:bold;padding:6px 18px")
     def _tx_ended(self):
         if self.tx: self.tx.stop(); self.tx = None
