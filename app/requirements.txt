@@ -1,0 +1,5 @@
+pyside6
+pyqtgraph
+numpy
+pyserial
+sounddevice
