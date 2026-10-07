@@ -409,10 +409,10 @@ class Main(QtWidgets.QMainWindow):
         self.ciq = W.QCheckBox("IQ balance"); self.ciq.setChecked(True); self.ciq.toggled.connect(lambda b: setattr(self.front, "iq_on", b))
         self.liq = W.QLabel("IQ: —"); self.liq.setMinimumWidth(170)
         self.lvfo = W.QLabel("VFO: —"); self.lvfo.setStyleSheet("font-weight:bold;color:#ff6b6b;font-size:14px"); self.lvfo.setMinimumWidth(220)
-        bc = W.QPushButton("Re-center (σήμα 10 kHz εκτός DC)"); bc.clicked.connect(self._recenter)
+        bc = W.QPushButton("Re-center (signal 10 kHz off DC)"); bc.clicked.connect(self._recenter)
         bz = W.QPushButton("VFO → 0"); bz.clicked.connect(lambda: self._set_vfo(0.0))
         for w in (self.cdc, self.ciq, self.liq, self.lvfo, bc, bz): r3b.addWidget(w)
-        r3b.addWidget(W.QLabel("  κλικ στο φάσμα/waterfall = συντονισμός · ροδέλα = ±10 Hz (Shift: ±1 kHz)")); r3b.addStretch()
+        r3b.addWidget(W.QLabel("  click spectrum/waterfall = tune · wheel = ±10 Hz (Shift: ±1 kHz)")); r3b.addStretch()
 
         pg.setConfigOptions(antialias=False)
         self.spec = pg.PlotWidget(); self.spec.setYRange(-110, 0); self.spec.showGrid(x=True, y=True, alpha=0.2)
@@ -486,8 +486,8 @@ class Main(QtWidgets.QMainWindow):
         if s.startswith("< C3TRX ") and s[8:9].isdigit():
             self.lfw.setText("FW: " + " ".join(s[2:].split()[:2]))
             if s[8:9] != "1":
-                self._log("!!! Λάθος firmware στη συσκευή (" + " ".join(s[2:].split()[:2]) + "). Το app θέλει C3TRX 1: "
-                          "πέρασε πρώτα το c3trx1_merged.bin με esptool.")
+                self._log("!!! Wrong firmware on the device (" + " ".join(s[2:].split()[:2]) + "). This app needs C3TRX 1: "
+                          "flash c3trx1_merged.bin with esptool first.")
         if s.startswith("< RXREADY"): self.rx = True; self.brx.setText("Stop RX")
         if s.startswith("< RXEND"):
             self.rx = False; self.brx.setText("Start RX")
@@ -573,7 +573,7 @@ class Main(QtWidgets.QMainWindow):
         if txf > 2450: self._log("! TX limited to 2300–2450 MHz by firmware"); return
         self.link.send_line(f"FREQ {round(txf*1000)}"); time.sleep(0.05)
         self.link.send_line(f"TX {m} {self.amp.value()} {p}")
-        self._log(f"TX on {txf:.5f} MHz (VFO). Μετά το TX πάτα Start RX.")
+        self._log(f"TX on {txf:.5f} MHz (VFO). After TX, press Start RX.")
         self.tx = TxFeeder(self.link, src, self.tone.value(), samples)
         self.bptt.setText("STOP TX"); self.bptt.setStyleSheet("background:#ff2d2d;color:white;font-weight:bold;padding:6px 18px")
     def _tx_ended(self):
