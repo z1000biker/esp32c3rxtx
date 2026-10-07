@@ -502,7 +502,7 @@ Read from `firmware/c3trx1_merged.bin` with `esptool image-info`:
 
 | Symptom | Fix |
 |---|---|
-| Log shows `!!! Λάθος firmware…` / FW is not `C3TRX 1` | The board runs a different build. Flash `c3trx1_merged.bin` at `0x0`. |
+| Log shows `!!! Wrong firmware on the device…` / FW is not `C3TRX 1` | The board runs a different build. Flash `c3trx1_merged.bin` at `0x0`. |
 | No COM port | Use a data‑capable USB cable; press **↻**; enter download mode with BOOT + RESET for flashing. |
 | `! sounddevice not installed: no audio` | `py -m pip install sounddevice` |
 | *Dropped* counter keeps rising | Increase **RX window** (e.g. 256–512), close other heavy USB/CPU loads. |
