@@ -4,7 +4,7 @@
 
 ### A full 2.4 GHz SDR transceiver built on the ESP32‑C3's on‑chip radio
 
-**Raw IQ over USB · software DSP on the desktop · AM / FM / USB / LSB / CW receive · AM / FM / USB / LSB transmit**
+**Raw IQ over USB · software DSP on the desktop · AM / FM / USB / LSB / CW receive · AM / FM / USB / LSB transmit · text painted on the waterfall**
 
 ![Chip](https://img.shields.io/badge/chip-ESP32--C3-E7352C?style=for-the-badge&logo=espressif&logoColor=white)
 ![Band](https://img.shields.io/badge/band-2.4%20GHz%20%2F%2013%20cm-0A84FF?style=for-the-badge)
@@ -25,6 +25,7 @@
 - [What this is](#what-this-is)
 - [How it works](#how-it-works)
 - [Feature tour](#feature-tour)
+- [Waterfall text messages](#-waterfall-text-messages) 🆕
 - [Project status](#project-status)
 - [Repository layout](#repository-layout)
 - [Quick start](#quick-start)
@@ -48,7 +49,7 @@
 The **ESP32‑C3** is a low‑cost RISC‑V microcontroller with a 2.4 GHz radio built into the silicon. Normally that radio only ever speaks Wi‑Fi and Bluetooth LE. **C3TRX turns it into a general‑purpose narrowband SDR transceiver** for the 2.4 GHz band:
 
 - the **firmware (C3TRX 1)** tunes the on‑chip radio, captures **raw complex baseband IQ** and streams it to the PC over the chip's **native USB**, and on transmit accepts **PCM audio** from the PC and modulates it onto the carrier (AM, FM, USB, LSB);
-- the **desktop app (`c3trx_app.py`)** does all the receive DSP — spectrum, waterfall, DC and IQ correction, channel filtering, demodulation, AGC, squelch, audio — and drives PTT with microphone, test‑tone or carrier sources.
+- the **desktop app (`c3trx_app.py`)** does all the receive DSP — spectrum, waterfall, DC and IQ correction, channel filtering, demodulation, AGC, squelch, audio — and drives PTT with microphone, test‑tone, carrier or **waterfall‑text** sources.
 
 No external RF hardware, no SDR dongle, no mixer, no codec: **one ESP32‑C3 board and a USB cable.**
 
@@ -76,7 +77,9 @@ flowchart LR
         FFT["1024-pt FFT<br/>spectrum + waterfall"]
         DEM["Demodulator<br/>mix · decimate · FIR · AM/FM/SSB/CW<br/>AGC · squelch"]
         AUD["Resampler → 48 kHz<br/>sound card"]
-        TXF["TX feeder<br/>mic · tone · carrier<br/>32 kS/s int16 PCM"]
+        WFT["Waterfall text<br/>text → bitmap → tones"]
+        TXF["TX feeder<br/>mic · tone · carrier · text<br/>32 kS/s int16 PCM"]
+        WFT --> TXF
         LINK --> FRONT --> FFT
         FRONT --> DEM --> AUD
     end
@@ -132,7 +135,7 @@ The link is **half‑duplex**: while receiving, the firmware is busy streaming a
 | Feature | Details |
 |---|---|
 | **Modes** | USB, LSB, AM, FM |
-| **Sources** | **mic** (sound‑card input), **tone** (50–5000 Hz sine), **carrier** |
+| **Sources** | **mic** (sound‑card input), **tone** (50–5000 Hz sine), **carrier**, **text** ([waterfall text](#-waterfall-text-messages)) |
 | **Frequency** | Transmits on the **VFO** frequency (centre + VFO offset) — click a signal, press PTT |
 | **Drive** | Amplitude 1–480 (firmware units) |
 | **AM depth** | 1–95 % |
@@ -147,6 +150,86 @@ The link is **half‑duplex**: while receiving, the firmware is busy streaming a
 - **`--selftest N`**: automated end‑to‑end check (connect, RX, spectrum/image measurement, VFO zero‑beat, all five demodulators, retune while streaming) that prints a report and saves `selftest.png`.
 - **Firmware check**: on connect the app reads `INFO` and warns if the board is not running C3TRX 1.
 - **Protocol console**: every command sent (`>`) and every line received (`<`) is logged with a timestamp.
+- **Mock TX**: the simulator accepts PCM after `TX` and answers `TXEND samples=… underruns=0` once the audio stops, like the firmware, so the whole PTT cycle can be tested without hardware.
+
+---
+
+## 🆕 Waterfall text messages
+
+Write a message, press PTT, and it appears **as text on the waterfall** of every receiver that sees your signal — SDR++, SDR#, WSJT‑X, an RTL‑SDR on the bench, or another C3TRX.
+
+<p align="center">
+  <img src="docs/wftext_horizontal.png" alt="Waterfall text, horizontal layout: CQ CQ DE SV1EEX" width="100%">
+</p>
+<p align="center"><sub>Preview of <code>CQ CQ DE SV1EEX</code>, horizontal layout, 40 Hz per pixel — exactly the audio the app sends.</sub></p>
+
+### How it works
+
+1. The text is drawn with a **Qt font** into a 1‑bit bitmap (any language your system fonts cover — Greek included).
+2. The bitmap is sent **one pixel line per time slice**. In each slice, every lit pixel becomes a **sine tone** at `Base + k × Pixel` Hz.
+3. The tones are summed and transmitted in **USB** (or LSB), so each audio tone lands on RF at *carrier + tone*: the receiver's waterfall draws the bitmap back.
+4. Each tone is switched on and off with a **soft raised‑cosine edge** (up to 10 ms) to limit splatter. Every tone gets its own random phase so the peaks of the sum stay low, and the whole message is normalised to 90 % of full scale.
+
+The app always picks the right orientation for you:
+
+| Situation | What the app does |
+|---|---|
+| **TX mode = USB** | Tone *k* (low → high) = pixel *k*. |
+| **TX mode = LSB** | Pixel order is mirrored, because LSB flips audio in RF — the text is **not** mirrored on air. |
+| **TX mode = AM or FM** | Switched to **USB** automatically (AM would double and mirror the picture, FM would smear it). |
+| **Receiver waterfall scrolls down** (newest line on top — most SDR apps) | Lines are sent bottom‑first so the text ends up upright. |
+| **Receiver waterfall scrolls up** | Choose *newest at bottom*; the order is reversed. |
+
+### Two layouts
+
+| | **vertical (narrow)** — default | **horizontal (wide)** |
+|---|---|---|
+| Text runs along | time (down the waterfall), rotated 90° | frequency (across the waterfall), upright |
+| Tones | font height (≈ 10 for 12 px) | text width (≈ 6–8 per character) |
+| Bandwidth, defaults | ≈ 1.35 kHz — **fits an SSB channel** | several kHz — reduce **Pixel** to fit |
+| Duration | long (one line per bitmap column) | short (one line per bitmap row) |
+| Best for | CQ calls, callsigns, beacons | short words seen on wide‑band SDR waterfalls |
+
+<p align="center">
+  <img src="docs/wftext_vertical.png" alt="Waterfall text, vertical layout" width="70%">
+</p>
+<p align="center"><sub>Vertical layout: the same message fits in 1.35 kHz. On a top‑scrolling waterfall it reads from the bottom up (tilt your head left).</sub></p>
+
+### Controls (row under the TX panel)
+
+| Control | Range / default | Meaning |
+|---|---|---|
+| **WF text** | `CQ CQ DE SV1EEX` | The message |
+| **Layout** | vertical (narrow) / horizontal (wide) | See above |
+| **Height** | 6–40 px, **12 px** | Font size → number of pixel lines of the glyphs |
+| **Pixel** | 20–1000 Hz, **150 Hz** | Frequency step between neighbouring pixels |
+| **Line** | 10–1000 ms, **80 ms** | Duration of one pixel line (scroll‑direction size of a pixel) |
+| **Base** | 100–10000 Hz, **400 Hz** | Audio frequency of the lowest pixel |
+| **RX waterfall** | newest on top / newest at bottom | Scroll direction of the *receiving* waterfall |
+| **Preview** | — | Spectrogram of the exact audio that will be sent, drawn with square pixels |
+| **Save WAV** | — | Writes the message as 48 kHz / 16‑bit mono WAV — play it into **any SSB transceiver** (e.g. an FT‑817) |
+| *info label* | — | Live tone count, audio range, duration; warns when wider than an SSB channel or above 15 kHz |
+
+### Sending a message
+
+1. Put the VFO where you want the message (click or wheel). The picture starts at **VFO + Base** in USB.
+2. Set **Source = text**, type the message, pick the layout, press **Preview** to check it.
+3. Press **PTT (TX)**. The app stops RX, sends `FREQ` and `TX USB <amp> 0`, and streams the message in real time.
+4. When the message ends, the app stops sending audio, the firmware ends TX and reports `TXEND`, and the PTT button resets by itself. Press **Start RX** to listen again.
+
+### Tuning the shape for a given receiver
+
+A waterfall pixel is *(FFT bin width) × (time per line)*. For the text to look right:
+
+- **Pixel (Hz)** should be at least **2 FFT bins** of the receiving waterfall. SDR++ / SDR# with a large FFT can resolve 20–50 Hz. The C3TRX app's own waterfall uses a 1024‑point FFT over the full IQ span, so its bins are about **rate / 1024 (≈ 140 Hz at 147 kS/s)** — use **Pixel ≥ 300 Hz** when the receiver is another C3TRX.
+- **Line (ms)** sets the height of a pixel. If letters look squashed or stretched, change **Line**.
+- **Narrower = more readable at weak signal**: total TX power is shared between all lit pixels, so fewer and larger pixels show up better.
+
+### Verified
+
+- **Bit‑exact round trip:** for both layouts, USB and LSB, and both scroll directions, the generated audio was decoded back into pixels by measuring every tone in every slice — **0 pixel errors out of 650**.
+- **Full PTT cycle in `--mock`:** source *text* with TX mode AM → app switched to USB, sent `TX USB 80 0`, streamed all **51 840** samples with **0 underruns**, received `TXEND`, PTT reset.
+- **On air:** not yet — depends on the firmware's TX path, which is still experimental (see [Project status](#project-status)).
 
 ---
 
@@ -159,6 +242,7 @@ The link is **half‑duplex**: while receiving, the firmware is busy streaming a
 | AM / USB demodulation | ✅ confirmed by ear on hardware |
 | FM / LSB / CW demodulation | ✅ verified in the mock self‑test |
 | TX (AM / FM / USB / LSB) | 🧪 experimental — not yet confirmed on air |
+| Waterfall text (app side) | ✅ verified in software (pixel‑exact decode, mock PTT cycle); on air pending TX |
 | Firmware source code | ⏳ not yet published — this repository currently ships the prebuilt image |
 
 ---
@@ -175,7 +259,9 @@ esp32c3rxtx/
 │   ├── c3trx1_merged.bin   ← C3TRX 1, merged image (bootloader + partitions + app), flash at 0x0
 │   └── SHA256SUMS
 └── docs/
-    └── screenshot.png
+    ├── screenshot.png
+    ├── wftext_horizontal.png
+    └── wftext_vertical.png
 ```
 
 The firmware binary is also attached to the **[v1 release](../../releases)**.
@@ -243,9 +329,11 @@ py c3trx_app.py --mock
 ### 4. Transmitting
 
 1. Put the VFO where you want to transmit (click or wheel).
-2. Choose **TX mode**, **Source** (`mic`, `tone`, `carrier`), **Amp**, and **AM %** or **FM dev**.
+2. Choose **TX mode**, **Source** (`mic`, `tone`, `carrier`, `text`), **Amp**, and **AM %** or **FM dev**.
 3. Press **PTT (TX)** — RX stops, the radio is tuned to the VFO frequency and audio starts streaming.
 4. Press **STOP TX** to end; the firmware reports `TXEND`. Press **Start RX** to listen again.
+
+With **Source = text** the transmission ends by itself when the message is complete — see [Waterfall text messages](#-waterfall-text-messages).
 
 ---
 
@@ -259,6 +347,7 @@ py c3trx_app.py --mock
 ├──────────────────────────── spectrum (click = tune) ────────────────────────────────┤
 ├──────────────────────────── waterfall (click = tune) ───────────────────────────────┤
 ├ TX mode  Source  Amp  AM %  FM dev  Tone Hz   [ PTT (TX) ]                          ┤
+├ WF text  Layout  Height  Pixel  Line  Base  RX waterfall  [Preview] [Save WAV]  info ┤
 └ log: > commands sent   < firmware replies ───────────────────────────────────────────┘
 ```
 
@@ -273,6 +362,7 @@ py c3trx_app.py --mock
 | **BW** | Channel filter bandwidth. |
 | **Zoom** | Spectrum/waterfall zoom around the VFO. |
 | **DC notch / IQ balance** | Front‑end corrections; the label shows the measured Q/I gain and phase error. |
+| **WF text row** | Message, layout and pixel geometry for **Source = text** — see [Waterfall text messages](#-waterfall-text-messages). |
 
 ---
 
@@ -418,7 +508,6 @@ Read from `firmware/c3trx1_merged.bin` with `esptool image-info`:
 | *Dropped* counter keeps rising | Increase **RX window** (e.g. 256–512), close other heavy USB/CPU loads. |
 | Strong spike in the centre | Normal zero‑IF LO leakage — keep **DC notch** on and use **Re‑center**. |
 | Mirror images of signals | Keep **IQ balance** on; give it a second to converge (watch the gain/phase readout settle). |
-| `ERR RX window 32..4096` | The app's spin box goes down to 16; the firmware's minimum is 32. |
 | `! TX limited to 2300–2450 MHz by firmware` | Move the VFO/centre below 2450 MHz. |
 | `TXEND NOAUDIO` | The firmware received no audio after `TX` — check the microphone device, or test with the `tone` source. |
 | Firmware reboots on PTT (`Guru Meditation … Interrupt wdt timeout`) | TX is experimental; please open an issue with the full log. |
