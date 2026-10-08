@@ -153,7 +153,7 @@ class SpectrumView(ctx: Context) : View(ctx) {
                 val (s, w) = window()
                 val r = if (rate > 0) rate else 147000
                 val bin = s + e.x / width * (w - 1)
-                onTune?.invoke((bin - FFT_N / 2) * r / FFT_N)
+                onTune?.invoke((bin.toDouble() - FFT_N / 2) * r / FFT_N)
                 return true
             }
         }
