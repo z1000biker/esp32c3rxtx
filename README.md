@@ -163,6 +163,15 @@ Write a message, press PTT, and it appears **as text on the waterfall** of every
 </p>
 <p align="center"><sub>Preview of <code>CQ CQ DE SV1EEX</code>, horizontal layout, 40 Hz per pixel — exactly the audio the app sends.</sub></p>
 
+### ✅ Received on air
+
+<p align="center">
+  <img src="docs/onair_plutosdr_sdrpp.png" alt="Waterfall text from C3TRX received on a PlutoSDR in SDR++" width="100%">
+</p>
+<p align="center"><sub>Waterfall text transmitted by C3TRX in USB and received over the air by an <b>ADALM‑PLUTO (PlutoSDR, Zynq‑7010)</b> in <b>SDR++</b>, tuned to 2400.000 MHz. "DE SV1EEX" is clearly readable and upright. The lowest‑frequency part of the message ("CQ CQ") came through weak — see the tip below.</sub></p>
+
+> **Tip:** if the left (lowest‑frequency) part of a horizontal message is faint, try raising **Base** to 800–1000 Hz. The lowest audio tones are the most likely to be attenuated in the SSB chain; the exact cause on C3TRX has not been measured yet.
+
 ### How it works
 
 1. The text is drawn with a **Qt font** into a 1‑bit bitmap (any language your system fonts cover — Greek included).
@@ -221,7 +230,7 @@ The app always picks the right orientation for you:
 
 A waterfall pixel is *(FFT bin width) × (time per line)*. For the text to look right:
 
-- **Pixel (Hz)** should be at least **2 FFT bins** of the receiving waterfall. SDR++ / SDR# with a large FFT can resolve 20–50 Hz. The C3TRX app's own waterfall uses a 1024‑point FFT over the full IQ span, so its bins are about **rate / 1024 (≈ 140 Hz at 147 kS/s)** — use **Pixel ≥ 300 Hz** when the receiver is another C3TRX.
+- **Pixel (Hz)** should be at least **2 FFT bins** of the receiving waterfall. SDR++ / SDR# with a large FFT can resolve 20–50 Hz. The C3TRX app's own waterfall uses a 1024‑point FFT over the full IQ span, so its bins are about **rate / 1024 (≈ 137 Hz at the measured 140.5 kS/s)** — use **Pixel ≥ 300 Hz** when the receiver is another C3TRX.
 - **Line (ms)** sets the height of a pixel. If letters look squashed or stretched, change **Line**.
 - **Narrower = more readable at weak signal**: total TX power is shared between all lit pixels, so fewer and larger pixels show up better.
 
@@ -229,7 +238,7 @@ A waterfall pixel is *(FFT bin width) × (time per line)*. For the text to look 
 
 - **Bit‑exact round trip:** for both layouts, USB and LSB, and both scroll directions, the generated audio was decoded back into pixels by measuring every tone in every slice — **0 pixel errors out of 650**.
 - **Full PTT cycle in `--mock`:** source *text* with TX mode AM → app switched to USB, sent `TX USB 80 0`, streamed all **51 840** samples with **0 underruns**, received `TXEND`, PTT reset.
-- **On air:** not yet — depends on the firmware's TX path, which is still experimental (see [Project status](#project-status)).
+- **On air:** ✅ received by a PlutoSDR in SDR++ (screenshot above) — the message was readable and upright with the default *newest on top* setting.
 
 ---
 
@@ -241,8 +250,9 @@ A waterfall pixel is *(FFT bin width) × (time per line)*. For the text to look 
 | RX IQ streaming, spectrum and waterfall | ✅ working on hardware |
 | AM / USB demodulation | ✅ confirmed by ear on hardware |
 | FM / LSB / CW demodulation | ✅ verified in the mock self‑test |
-| TX (AM / FM / USB / LSB) | 🧪 experimental — not yet confirmed on air |
-| Waterfall text (app side) | ✅ verified in software (pixel‑exact decode, mock PTT cycle); on air pending TX |
+| TX USB | ✅ confirmed on air — waterfall text received on a PlutoSDR (SDR++) |
+| TX AM / FM / LSB | 🧪 experimental — not yet confirmed on air |
+| Waterfall text | ✅ verified in software (pixel‑exact decode, mock PTT cycle) and received on air |
 | Firmware source code | ⏳ not yet published — this repository currently ships the prebuilt image |
 
 ---
@@ -260,6 +270,7 @@ esp32c3rxtx/
 │   └── SHA256SUMS
 └── docs/
     ├── screenshot.png
+    ├── onair_plutosdr_sdrpp.png
     ├── wftext_horizontal.png
     └── wftext_vertical.png
 ```
@@ -474,8 +485,8 @@ after re-center: freq 2399.9910 | VFO: 2400.00100 MHz | rx True
 
 What this shows:
 
-- **IQ correction:** the estimator recovers the injected errors (gain 0.850, phase +6.0°), and the image falls to **~78 dB below** the signal. The DC spike is notched to the noise floor.
-- **Sideband rejection:** the same carrier is **~46 dB** weaker in LSB than in USB.
+- **IQ correction:** the estimator recovers the injected errors exactly (gain 0.850, phase +6.0°), and the image drops **into the simulator's noise floor** (the ~73–78 dB figure varies run to run because it is noise‑limited). The DC spike is notched to the noise floor. These are synthetic‑signal results that check the algorithm — they are **not** hardware image‑rejection measurements.
+- **Sideband rejection:** the same carrier is ~46 dB weaker in LSB than in USB — again limited by the simulator's noise, not a hardware figure.
 - **VFO:** tuning onto the carrier gives zero beat, and offsets shift the audio tone as expected.
 - **Retune while streaming:** stop → `FREQ` → `RX` restarts cleanly with the signal moved 10 kHz off DC.
 
