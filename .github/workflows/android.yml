@@ -1,0 +1,87 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            V="${{ github.event.release.tag_name }}"; V="${V#android-}"; V="${V#v}"
+          else
+            V="0.1.0-dev.${{ github.run_number }}"
+          fi
+          echo "C3TRX_VERSION_NAME=$V" >> "$GITHUB_ENV"
+          echo "C3TRX_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "Version $V (${{ github.run_number }})"
+
+      - name: Private signing key (optional, from secrets)
+        env:
+          KS_B64: ${{ secrets.C3TRX_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.C3TRX_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.C3TRX_KEY_ALIAS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "C3TRX_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "C3TRX_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "C3TRX_KEY_ALIAS=${KS_ALIAS:-c3trx}" >> "$GITHUB_ENV"
+            echo "Signing with the private key from secrets"
+          elif [ -f android/app/c3trx-public.keystore ]; then
+            echo "No secrets: signing with the public project key (android/app/c3trx-public.keystore)"
+          else
+            keytool -genkeypair -keystore android/app/c3trx-public.keystore -storetype PKCS12 \
+              -storepass c3trx-public -keypass c3trx-public -alias c3trx -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=C3TRX build key, O=SV1EEX, C=GR"
+            echo "::warning::No signing key in secrets or in the repo: signed with a key made for this run only. Updates over this APK will need an uninstall first."
+          fi
+
+      - name: Unit tests
+        run: gradle -p android testDebugUnitTest --stacktrace
+
+      - name: Build APK
+        run: |
+          gradle -p android assembleRelease --stacktrace
+          cp android/app/build/outputs/apk/release/app-release.apk "C3TRX-${C3TRX_VERSION_NAME}.apk"
+          ls -la *.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: C3TRX-apk
+          path: "C3TRX-*.apk"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: android/app/build/reports/tests/
+
+      - name: Attach APK to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" C3TRX-*.apk --clobber
