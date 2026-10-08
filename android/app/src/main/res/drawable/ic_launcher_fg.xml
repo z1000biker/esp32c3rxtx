@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spectrum trace with a red VFO line, on the 108 dp adaptive-icon canvas (safe zone 18..90) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#4CA6FF" android:strokeWidth="3.5" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M24,70 L34,68 L40,64 L46,69 L52,40 L56,34 L60,42 L66,67 L72,62 L78,68 L84,70" />
+    <path android:strokeColor="#FF4D4D" android:strokeWidth="3" android:fillColor="#00000000"
+        android:pathData="M56,26 L56,80" />
+    <path android:fillColor="#3344A2FF" android:pathData="M50,28 L62,28 L62,78 L50,78 Z" />
+</vector>
