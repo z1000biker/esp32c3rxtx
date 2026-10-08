@@ -10,7 +10,7 @@
 ![Band](https://img.shields.io/badge/band-2.4%20GHz%20%2F%2013%20cm-0A84FF?style=for-the-badge)
 ![Firmware](https://img.shields.io/badge/firmware-C3TRX%201-6E40C9?style=for-the-badge)
 ![Python](https://img.shields.io/badge/app-Python%203%20%2B%20Qt6-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Platform](https://img.shields.io/badge/runs%20on-Windows%20%7C%20Linux%20%7C%20macOS-333?style=for-the-badge)
+![Platform](https://img.shields.io/badge/runs%20on-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android%2010%2B-333?style=for-the-badge)
 
 <img src="docs/screenshot.png" alt="C3TRX desktop app: spectrum, waterfall, VFO and TX panel" width="100%">
 
@@ -25,7 +25,8 @@
 - [What this is](#what-this-is)
 - [How it works](#how-it-works)
 - [Feature tour](#feature-tour)
-- [Waterfall text messages](#-waterfall-text-messages) 🆕
+- [Waterfall text messages](#-waterfall-text-messages)
+- [Android app](#-android-app) 🆕
 - [Project status](#project-status)
 - [Repository layout](#repository-layout)
 - [Quick start](#quick-start)
@@ -242,6 +243,14 @@ A waterfall pixel is *(FFT bin width) × (time per line)*. For the text to look 
 
 ---
 
+## 📱 Android app
+
+The same transceiver on a phone or tablet: plug the ESP32‑C3 in with a **USB OTG** cable and run **C3TRX for Android** (Android 10 or later). It has the same DSP and functions as the desktop app: RX AM/FM/USB/LSB/CW, spectrum and waterfall with touch tuning, DC notch and IQ balance, TX with microphone, tone, carrier or waterfall text, preview and WAV export, plus a built‑in simulator (**Demo**).
+
+**Download the APK from [Releases](../../releases).** The source code and details are in [`android/`](android/README.md).
+
+---
+
 ## Project status
 
 | Area | Status |
@@ -253,6 +262,7 @@ A waterfall pixel is *(FFT bin width) × (time per line)*. For the text to look 
 | TX USB | ✅ confirmed on air — waterfall text received on a PlutoSDR (SDR++) |
 | TX AM / FM / LSB | 🧪 experimental — not yet confirmed on air |
 | Waterfall text | ✅ verified in software (pixel‑exact decode, mock PTT cycle) and received on air |
+| Android app | 🧪 new — DSP and protocol verified with unit tests and the simulator; awaiting hardware reports |
 | Firmware source code | ⏳ not yet published — this repository currently ships the prebuilt image |
 
 ---
@@ -265,6 +275,7 @@ esp32c3rxtx/
 ├── app/
 │   ├── c3trx_app.py        ← desktop application (PySide6 + pyqtgraph)
 │   └── requirements.txt
+├── android/                ← Android app (Kotlin, Android 10+, USB OTG) — APK in Releases
 ├── firmware/
 │   ├── c3trx1_merged.bin   ← C3TRX 1, merged image (bootloader + partitions + app), flash at 0x0
 │   └── SHA256SUMS
