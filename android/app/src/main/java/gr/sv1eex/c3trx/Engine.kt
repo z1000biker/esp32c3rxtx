@@ -3,6 +3,8 @@ package gr.sv1eex.c3trx
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import kotlin.math.log10
 import kotlin.math.sqrt
@@ -39,12 +41,31 @@ class AudioRing {
     fun clear() = synchronized(lock) { r = 0; w = 0; n = 0 }
 }
 
-class AudioOut {
+class AudioOut(private val onError: (String) -> Unit) {
     val ring = AudioRing()
-    @Volatile private var run = true
-    private val track: AudioTrack? = try {
+    private val worker = Executors.newSingleThreadExecutor { Thread(it, "c3trx-audio") }
+    private var playback: Future<*>? = null
+
+    fun start() {
+        if (playback?.isDone == false) return
+        ring.clear()
+        playback = worker.submit { play() }
+    }
+
+    fun stop() {
+        playback?.cancel(true)
+        playback = null
+    }
+
+    fun close() {
+        stop()
+        worker.shutdownNow()
+    }
+
+    private fun openTrack(): AudioTrack {
         val min = AudioTrack.getMinBufferSize(AUDIO_SR, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
-        AudioTrack.Builder()
+        check(min > 0) { "getMinBufferSize returned $min" }
+        return AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAudioFormat(AudioFormat.Builder().setSampleRate(AUDIO_SR)
@@ -53,22 +74,44 @@ class AudioOut {
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
-    } catch (e: Exception) { null }
+    }
 
-    private val thread = Thread({
-        val t = track ?: return@Thread
-        t.play()
-        val blk = FloatArray(512)
-        while (run) {
-            ring.pull(blk)
-            t.write(blk, 0, blk.size, AudioTrack.WRITE_BLOCKING)
+    private fun play() {
+        val thread = Thread.currentThread()
+        try {
+            val track = openTrack()
+            try {
+                if (thread.isInterrupted) return
+                track.play()
+                check(track.playState == AudioTrack.PLAYSTATE_PLAYING) { "AudioTrack did not start" }
+                val samples = FloatArray(512)
+                var offset = samples.size
+                var lastWrite = System.nanoTime()
+                while (!thread.isInterrupted) {
+                    if (offset == samples.size) {
+                        ring.pull(samples)
+                        offset = 0
+                    }
+                    // A blocked output must not prevent Stop RX from releasing the track.
+                    val written = track.write(samples, offset, samples.size - offset, AudioTrack.WRITE_NON_BLOCKING)
+                    check(written >= 0) { "AudioTrack.write returned $written" }
+                    if (written == 0) {
+                        check(System.nanoTime() - lastWrite < TimeUnit.SECONDS.toNanos(2)) { "AudioTrack stopped accepting samples" }
+                        Thread.sleep(5)
+                    } else {
+                        offset += written
+                        lastWrite = System.nanoTime()
+                    }
+                }
+            } finally {
+                track.release()
+            }
+        } catch (_: InterruptedException) {
+            // RX was stopped while waiting for space in the playback buffer.
+        } catch (e: Exception) {
+            if (!thread.isInterrupted) onError("! audio output: ${e.message}")
         }
-        t.stop(); t.release()
-    }, "c3trx-audio")
-
-    init { thread.start() }
-    val ok get() = track != null
-    fun close() { run = false }
+    }
 }
 
 /** Snapshot handed to the display: averaged spectrum (dB, fftshifted) + the parameters it was made with. */
