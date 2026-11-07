@@ -14,6 +14,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -47,7 +48,7 @@ class MainActivity : Activity() {
     private lateinit var usb: UsbManager
     private val prefs by lazy { getSharedPreferences("c3trx", MODE_PRIVATE) }
 
-    private val audio by lazy { AudioOut() }
+    private val audio by lazy { AudioOut { message -> ui.post { log(message) } } }
     private lateinit var engine: Engine
     private var link: Link? = null
     private var isMock = false
@@ -90,6 +91,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        volumeControlStream = AudioManager.STREAM_MUSIC
         usb = getSystemService(Context.USB_SERVICE) as UsbManager
         engine = Engine(audio) { f ->
             frames.add(f)
@@ -99,7 +101,6 @@ class MainActivity : Activity() {
         val f = IntentFilter(ACTION_USB_PERMISSION).apply { addAction(UsbManager.ACTION_USB_DEVICE_DETACHED) }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbReceiver, f, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(usbReceiver, f)
-        if (!audio.ok) log("! audio output could not be opened")
         ui.postDelayed(statusTick, 250)
         handleIntent(intent)
     }
@@ -128,6 +129,11 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         savePrefs()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && rx) audio.start()
     }
 
     private fun drainFrames() {
@@ -360,7 +366,12 @@ class MainActivity : Activity() {
 
     private fun startLink(ser: SerialIo, mock: Boolean) {
         isMock = mock
-        val l = Link(ser, { s -> ui.post { onLine(s) } }, { s -> ui.post { log("! $s"); disconnect() } })
+        lateinit var l: Link
+        l = Link(ser, { s -> ui.post { if (link === l) onLine(s) } }, { s ->
+            ui.post {
+                if (link === l) { log("! $s"); disconnect() }
+            }
+        })
         link = l; engine.link = l
         bConn.text = "Disconnect"
         log(if (mock) "connected to the simulator (+1 kHz test carrier)" else "connected over USB")
@@ -375,6 +386,7 @@ class MainActivity : Activity() {
         link = null; engine.link = null
         try { l.close() } catch (_: Exception) {}
         rx = false; pending = false
+        audio.stop()
         bRx.text = "Start RX"; bConn.text = "Connect"; lFw.text = "FW: —"
         log("disconnected")
     }
@@ -386,9 +398,14 @@ class MainActivity : Activity() {
             lFw.text = "FW: $id"
             if (s[8] != '1') log("!!! Wrong firmware on the device ($id). This app needs C3TRX 1: flash c3trx1_merged.bin with esptool first.")
         }
-        if (s.startsWith("< RXREADY")) { rx = true; bRx.text = "Stop RX" }
+        if (s.startsWith("< RXREADY")) {
+            rx = true; bRx.text = "Stop RX"
+            // Start only once the RX stream is ready and the activity is in front.
+            if (hasWindowFocus()) audio.start()
+        }
         if (s.startsWith("< RXEND")) {
             rx = false; bRx.text = "Start RX"
+            audio.stop()
             if (pending) { pending = false; rxToggle() }      // restart after a retune
         }
         if (s.startsWith("< TXEND")) txEnded()
