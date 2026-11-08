@@ -1,0 +1,78 @@
+name: ESP32-C6 Audio Workbench
+
+on:
+  push:
+    branches: [esp32-c6-audio]
+    paths: ["c6-audio/**", ".github/workflows/c6-audio.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: c6-audio
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test audio and build Windows app
+        run: |
+          node --test c6-audio/tests/audio.test.js
+          bash c6-audio/windows/build.sh
+      - name: Install pinned Android SDK components and build the APK
+        run: |
+          sdk="$RUNNER_TEMP/c6-android-sdk"
+          mkdir -p "$sdk"
+          curl -fsSL --retry 3 https://dl.google.com/android/repository/platform-35_r02.zip -o "$sdk/platform.zip"
+          curl -fsSL --retry 3 https://dl.google.com/android/repository/build-tools_r35_linux.zip -o "$sdk/tools.zip"
+          (
+            cd "$sdk"
+            printf '%s  %s\n' \
+              0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0 platform.zip \
+              bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88 tools.zip | sha256sum -c -
+            unzip -q platform.zip android-35/android.jar
+            unzip -q tools.zip
+          )
+          tools="$(find "$sdk" -maxdepth 2 -name aapt2 -type f -print -quit)"
+          test -n "$tools"
+          ANDROID_SDK_ROOT="$sdk" ANDROID_BUILD_TOOLS="$(dirname "$tools")" \
+            ANDROID_PLATFORM_JAR="$sdk/android-35/android.jar" bash c6-audio/android/build.sh
+      - name: Build C6 Audio RX firmware
+        run: bash c6-audio/ci/build-firmware.sh
+      - name: Package the release
+        run: |
+          cd c6-audio
+          (cd dist && sha256sum *.bin *.apk *.exe > SHA256SUMS.txt)
+          zip -qr "$RUNNER_TEMP/ESP32-C6-DevKitC-1-Audio-RX.zip" .
+          unzip -tq "$RUNNER_TEMP/ESP32-C6-DevKitC-1-Audio-RX.zip"
+      - name: Publish C6 audio preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=c6-audio-v0.1.0-preview
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Preview already published."
+            exit 0
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title 'ESP32-C6 Audio RX Workbench 0.1.0 Preview' \
+            --notes 'ESP32-C6-DevKitC-1 (8 MB) audio receiver. Flash esp32c6_devkitc1_audio_rx.bin at 0x0. AM, narrow FM, USB and LSB audio. DSP and USB framing tested with simulated I/Q; physical RF reception still to be verified.' \
+            "$RUNNER_TEMP/ESP32-C6-DevKitC-1-Audio-RX.zip" c6-audio/dist/*.bin \
+            c6-audio/dist/*.apk c6-audio/dist/*.exe c6-audio/dist/SHA256SUMS.txt

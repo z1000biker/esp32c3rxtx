@@ -1,0 +1,17 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * The app drives USB-Serial-JTAG's FIFOs itself: Zephyr's driver stays off,
+ * the console moves to UART0 (D6 TX, D7 RX).
+ */
+
+/ {
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+	};
+};
+
+&usb_serial {
+	status = "disabled";
+};

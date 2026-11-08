@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ESP32-C6 2.4 GHz Audio Workbench</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="spectrum.js"></script>
+  <script defer src="usb.js"></script>
+  <script defer src="receiver.js"></script>
+  <script defer src="workbench.js"></script>
+</head>
+<body><div class="app">
+  <div class="top">
+    <div><h1>ESP32-C6 2.4 GHz Audio Workbench</h1>
+      <div class="sub">SV1EEX · Continuous I/Q · AM / NFM / USB / LSB audio</div></div>
+    <div id="connTop" class="status" role="status">DISCONNECTED</div>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="label">Firmware</div><div id="fwCard" class="value">—</div></div>
+    <div class="card"><div class="label">Center frequency</div><div id="freqCard" class="value">2442 MHz</div></div>
+    <div class="card"><div class="label">Radio state</div><div id="stateCard" class="value">IDLE</div></div>
+    <div class="card"><div class="label">I/O statistics</div><div id="statCard" class="value">0 frames</div></div>
+  </div>
+  <div class="panel"><div class="toolbar">
+    <button id="connect" class="primary">Connect USB</button>
+    <div class="field"><label for="freq">Center frequency (MHz)</label>
+      <input id="freq" type="number" min="2400" max="2500" step="0.001" value="2442"></div>
+    <button id="live" class="primary" disabled>Start RX + audio</button>
+  </div></div>
+  <div class="main">
+    <div class="display panel">
+      <div class="scopeWrap"><canvas id="spectrum" width="1400" height="305"></canvas><div class="freqline"></div>
+        <canvas id="waterfall" width="1400" height="240"></canvas></div>
+      <div class="axis"><span id="leftFreq">—</span><span id="spanText">Span —</span><span id="rightFreq">—</span></div>
+      <p class="small">Use the C6 Audio RX firmware and tune to an analog transmission within the 2.4 GHz band.</p>
+    </div>
+    <div class="side"><section class="panel">
+      <h2>Receiver</h2>
+      <div class="ctrlgrid">
+        <div class="field"><label for="zoom">Zoom</label><input id="zoom" type="range" min="1" max="32" step="1" value="1"></div>
+        <div class="field"><label for="zoomText">Zoom factor</label><input id="zoomText" type="text" value="1×" readonly></div>
+        <div class="field"><label for="mode">Demodulation</label><select id="mode">
+          <option value="NFM">Narrow FM</option><option>AM</option><option>USB</option><option>LSB</option>
+        </select></div>
+        <div class="field"><label for="volume">Volume</label><input id="volume" type="range" min="0" max="100" value="65"></div>
+        <div class="field"><label for="avg">Averaging</label><input id="avg" type="number" min="1" max="32" step="1" value="4"></div>
+        <div class="field"><label for="wfMin">Waterfall min (dBFS)</label><input id="wfMin" type="number" min="-160" max="0" value="-100"></div>
+        <div class="field"><label for="wfMax">Waterfall max (dBFS)</label><input id="wfMax" type="number" min="-140" max="20" value="0"></div>
+        <div class="toggleRow"><input id="peak" type="checkbox"><label for="peak">Peak hold</label></div>
+      </div>
+      <div class="actions">
+        <button id="stop" class="secondary" disabled>Stop RX</button>
+      </div>
+    </section><section class="panel">
+      <h2>Device console</h2><div id="log"></div>
+    </section></div>
+  </div>
+</div></body>
+</html>
