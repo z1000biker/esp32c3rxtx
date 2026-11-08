@@ -30,8 +30,24 @@ jobs:
         run: |
           node --test c6/tests/workbench.test.js
           bash c6/windows/build.sh
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-          bash c6/android/build.sh
+      - name: Install pinned Android SDK components and build the APK
+        run: |
+          sdk="$RUNNER_TEMP/c6-android-sdk"
+          mkdir -p "$sdk"
+          curl -fsSL --retry 3 https://dl.google.com/android/repository/platform-35_r02.zip -o "$sdk/platform.zip"
+          curl -fsSL --retry 3 https://dl.google.com/android/repository/build-tools_r35_linux.zip -o "$sdk/tools.zip"
+          (
+            cd "$sdk"
+            printf '%s  %s\n' \
+              0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0 platform.zip \
+              bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88 tools.zip | sha256sum -c -
+            unzip -q platform.zip android-35/android.jar
+            unzip -q tools.zip
+          )
+          tools="$(find "$sdk" -maxdepth 2 -name aapt2 -type f -print -quit)"
+          test -n "$tools"
+          ANDROID_SDK_ROOT="$sdk" ANDROID_BUILD_TOOLS="$(dirname "$tools")" \
+            ANDROID_PLATFORM_JAR="$sdk/android-35/android.jar" bash c6/android/build.sh
       - name: Assemble the pinned firmware
         run: |
           parts="$(mktemp -d)"

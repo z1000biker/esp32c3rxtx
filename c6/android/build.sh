@@ -29,7 +29,8 @@ if [[ -n ${C6_KEYSTORE:-} ]]; then
 else
   C6_KEYSTORE="$work/preview.p12"
   C6_KEY_ALIAS=c6-preview
-  export C6_KEYSTORE_PASSWORD=android
+  C6_KEYSTORE_PASSWORD=$(openssl rand -hex 24)
+  export C6_KEYSTORE_PASSWORD
   keytool -genkeypair -keystore "$C6_KEYSTORE" -storetype PKCS12 \
     -storepass "$C6_KEYSTORE_PASSWORD" -alias "$C6_KEY_ALIAS" -keyalg RSA -keysize 2048 \
     -validity 3650 -dname "CN=ESP32-C6 Workbench preview"
