@@ -1,0 +1,61 @@
+name: ESP32-C6 RX Workbench
+
+on:
+  push:
+    branches: [esp32-c6-workbench]
+    paths: ["c6/**", ".github/workflows/c6-workbench.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: c6-workbench
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check the protocol and build both clients
+        run: |
+          node --test c6/tests/workbench.test.js
+          bash c6/windows/build.sh
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          bash c6/android/build.sh
+      - name: Assemble the pinned firmware
+        run: |
+          parts="$(mktemp -d)"
+          for part in 0-bootloader.bin 1-partition-table.bin 2-esp_sdr.bin; do
+            curl --fail --silent --show-error --retry 3 \
+              "https://espargos.net/espsdr/app/firmware/esp32c6/$part" -o "$parts/$part"
+          done
+          python3 c6/merge_firmware.py "$parts" c6/dist
+          (cd c6/dist && sha256sum *.bin *.apk *.exe > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESP32-C6-Workbench
+          path: c6/dist/
+      - name: Publish C6 preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=c6-v0.1.0-preview
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "The preview tag already has a release."
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
+              --title 'ESP32-C6 RX Workbench 0.1.0 Preview' \
+              --notes 'Windows and Android previews of the SV1EEX browser workbench for ESP32-C6. Spectrum and I/Q snapshots. Flash the merged BIN at 0x0. The firmware is ESPARGOS ESP-SDR (GPL-3.0-or-later), source commit 9b61e7465bee6da15209c5c09308043d08c46a1d.' \
+              c6/dist/ESP32-C6-Workbench-Windows-x64.exe c6/dist/ESP32-C6-Workbench-Android.apk \
+              c6/dist/esp32c6_devkitc1_espsdr_rx_merged.bin c6/dist/SHA256SUMS.txt
+          fi

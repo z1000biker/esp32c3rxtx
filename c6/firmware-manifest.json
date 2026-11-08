@@ -1,0 +1,46 @@
+{
+  "revision": "esp32c6",
+  "label": "ESP32-C6 (2 MB or larger)",
+  "target": "esp32c6",
+  "chip": "ESP32-C6",
+  "version": "9b61e7465bee6da15209c5c09308043d08c46a1d",
+  "flash_size": "2MB",
+  "flash_size_policy": "minimum",
+  "flash_settings": {
+    "flash_mode": "dio",
+    "flash_size": "2MB",
+    "flash_freq": "80m"
+  },
+  "esptool_args": {
+    "after": "hard-reset",
+    "before": "default-reset",
+    "stub": true,
+    "chip": "esp32c6"
+  },
+  "parts": [
+    {
+      "name": "0-bootloader.bin",
+      "offset": 0,
+      "size": 22240,
+      "sha256": "1fb3ddf7af9739841a11d60120bf223ce4da7efdee9a7c5d0abe907487042d4d",
+      "md5": "46b1c0f6ffa1384d5888394ccc3f2b4e"
+    },
+    {
+      "name": "1-partition-table.bin",
+      "offset": 32768,
+      "size": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820",
+      "md5": "5d61d196adc3dba01928f264eb169be7"
+    },
+    {
+      "name": "2-esp_sdr.bin",
+      "offset": 65536,
+      "size": 797440,
+      "sha256": "a0f472ca67679916ecf4901827ad7e2414c2fb32a734a08e1c664a2531bfbc19",
+      "md5": "985a0f5e2c144e5206ceb4c8de6781d8"
+    }
+  ],
+  "build_date": "2026-10-26",
+  "git_revision": "9b61e7465bee6da15209c5c09308043d08c46a1d",
+  "build_timestamp": "2026-10-26T21:26:32Z"
+}
