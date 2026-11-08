@@ -1,0 +1,41 @@
+name: Waveshare ESP32-C6-Zero Audio RX
+
+on:
+  push:
+    branches: [esp32-c6-zero]
+    paths: ["c6-audio/**", ".github/workflows/c6-zero.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the 4 MB Audio RX image
+        run: bash c6-audio/ci/build-firmware.sh c6-zero
+      - name: Package the firmware and source
+        run: |
+          cd c6-audio
+          (cd dist && sha256sum esp32c6_zero_audio_rx.bin > SHA256SUMS.txt)
+          zip -qr "$RUNNER_TEMP/ESP32-C6-Zero-Audio-RX.zip" .
+          unzip -tq "$RUNNER_TEMP/ESP32-C6-Zero-Audio-RX.zip"
+      - name: Publish Zero preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=c6-zero-v0.1.0-preview
+          if gh release view "$tag" >/dev/null 2>&1; then exit 0; fi
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title 'Waveshare ESP32-C6-Zero Audio RX Preview' \
+            --notes 'Audio RX firmware image for the Waveshare ESP32-C6-Zero, with 4 MB flash geometry. Flash at 0x0. Use the Windows or Android client from c6-audio-v0.1.1-preview. Physical board and RF testing are pending.' \
+            "$RUNNER_TEMP/ESP32-C6-Zero-Audio-RX.zip" c6-audio/dist/esp32c6_zero_audio_rx.bin \
+            c6-audio/dist/SHA256SUMS.txt c6-audio/TESTER_EL.md

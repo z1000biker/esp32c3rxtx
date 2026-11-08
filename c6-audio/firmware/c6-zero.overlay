@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* The Zero uses the same native ESP32-C6 USB pins. Use the smaller common
+ * flash geometry so both C6FH4 and C6FH8 variants fit this image. */
+&flash0 {
+	reg = <0x0 DT_SIZE_M(4)>;
+	ranges = <0x0 0x0 DT_SIZE_M(4)>;
+};

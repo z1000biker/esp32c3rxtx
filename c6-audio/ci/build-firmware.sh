@@ -2,6 +2,12 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+image_name=esp32c6_devkitc1_audio_rx.bin
+overlay=()
+if [[ ${1:-} == c6-zero ]]; then
+  image_name=esp32c6_zero_audio_rx.bin
+  overlay=("-DEXTRA_DTC_OVERLAY_FILE=$root/firmware/c6-zero.overlay")
+fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/ws" "$work/sdk" "$root/dist"
@@ -72,13 +78,17 @@ export ZEPHYR_BASE="$ws/modules/zephyr"
 export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 cmake -G Ninja -S "$app" -B "$ws/build" -DBOARD=esp32c6_devkitc/esp32c6/hpcore \
   "-DZEPHYR_MODULES=$ws/modules/hal/espressif;$ws/esp-sdr-zephyr;$ws/modules/crypto/mbedtls;$ws/modules/crypto/tf-psa-crypto" \
-  "-DESP_SDR_UPSTREAM_DIR=$ws/modules/lib/esp-sdr"
+  "-DESP_SDR_UPSTREAM_DIR=$ws/modules/lib/esp-sdr" "${overlay[@]}"
 cmake --build "$ws/build" --parallel
 grep -qx 'CONFIG_ESP_SIMPLE_BOOT=y' "$ws/build/zephyr/.config"
 grep -qx 'CONFIG_FLASH_LOAD_OFFSET=0' "$ws/build/zephyr/.config"
-image="$root/dist/esp32c6_devkitc1_audio_rx.bin"
+image="$root/dist/$image_name"
 cp "$ws/build/zephyr/zephyr.bin" "$image"
-esptool --chip esp32c6 image-info "$image"
+info=$(esptool --chip esp32c6 image-info "$image")
+printf '%s\n' "$info"
+if [[ ${1:-} == c6-zero ]]; then
+  grep -F 'Flash size: 4MB' <<< "$info"
+fi
 
 # Ship the corresponding firmware source with the binaries.
 mkdir -p "$root/firmware/esp-sdr-zephyr"
