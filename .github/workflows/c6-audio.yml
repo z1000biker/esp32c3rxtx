@@ -29,9 +29,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Test audio and build Windows app
         run: |
           node --test c6-audio/tests/audio.test.js
@@ -54,8 +51,16 @@ jobs:
           test -n "$tools"
           ANDROID_SDK_ROOT="$sdk" ANDROID_BUILD_TOOLS="$(dirname "$tools")" \
             ANDROID_PLATFORM_JAR="$sdk/android-35/android.jar" bash c6-audio/android/build.sh
-      - name: Build C6 Audio RX firmware
-        run: bash c6-audio/ci/build-firmware.sh
+      - name: Include the original Audio RX firmware and its source
+        run: |
+          previous="$RUNNER_TEMP/c6-audio-v0.1.0.zip"
+          curl -fsSL --retry 3 --max-time 120 \
+            https://github.com/z1000biker/esp32c3rxtx/releases/download/c6-audio-v0.1.0-preview/ESP32-C6-DevKitC-1-Audio-RX.zip \
+            -o "$previous"
+          printf '%s  %s\n' ac4c53fb8aa4fd84070cb59545bfb8af68cfa8ed0f811447204b6a3a9a2a4bec "$previous" | sha256sum -c -
+          cd c6-audio
+          unzip -q "$previous" 'dist/esp32c6_devkitc1_audio_rx.bin' 'firmware/esp-sdr-zephyr/*'
+          printf '%s  %s\n' 516ccc4655b8b9ad05c6a77d72ca3aedbea0d2f10e80d032efe7899cdb3fa044 dist/esp32c6_devkitc1_audio_rx.bin | sha256sum -c -
       - name: Package the release
         run: |
           cd c6-audio
@@ -66,13 +71,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag=c6-audio-v0.1.0-preview
+          tag=c6-audio-v0.1.1-preview
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Preview already published."
             exit 0
           fi
           gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false \
-            --title 'ESP32-C6 Audio RX Workbench 0.1.0 Preview' \
-            --notes 'ESP32-C6-DevKitC-1 (8 MB) audio receiver. Flash esp32c6_devkitc1_audio_rx.bin at 0x0. AM, narrow FM, USB and LSB audio. DSP and USB framing tested with simulated I/Q; physical RF reception still to be verified.' \
+            --title 'ESP32-C6 Audio RX Workbench 0.1.1 Preview' \
+            --notes 'ESP32-C6-DevKitC-1 audio receiver with a 15.625 kS/s 8-bit default USB profile and index-based gap diagnostics. If already running c6_audio_rx 0.1.0, update the client only. The firmware asset is byte-for-byte identical to 0.1.0. If Android reports a signing conflict with the older preview, uninstall that preview before installing the new APK. Validated with synthetic I/Q.' \
             "$RUNNER_TEMP/ESP32-C6-DevKitC-1-Audio-RX.zip" c6-audio/dist/*.bin \
             c6-audio/dist/*.apk c6-audio/dist/*.exe c6-audio/dist/SHA256SUMS.txt

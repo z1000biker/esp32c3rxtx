@@ -3,8 +3,11 @@
 const SERIAL_MAGIC = 0x4c525345;
 const BLOCK_MAGIC = 0x4b4c4245;
 const BLOCK_LENGTH = 4096;
-const IQ_RATE = 62500;
-const AUDIO_RATE = IQ_RATE / 2;
+const STREAM_PROFILES = Object.freeze({
+  low: Object.freeze({rate: 15625, bits: 8, gain: 24, tuningOffset: 2000}),
+  medium: Object.freeze({rate: 31250, bits: 8, gain: 24, tuningOffset: 5000}),
+  wide: Object.freeze({rate: 62500, bits: 16, gain: 12, tuningOffset: 12000}),
+});
 
 function requestFrame(command, {value = 0, size = 0, body = new Uint8Array()} = {}) {
   const packet = new Uint8Array(12 + body.length);
@@ -76,8 +79,8 @@ class StreamDecoder {
 }
 
 class LowPass {
-  constructor(hz, q = Math.SQRT1_2) {
-    const omega = 2 * Math.PI * hz / IQ_RATE;
+  constructor(hz, sampleRate, q = Math.SQRT1_2) {
+    const omega = 2 * Math.PI * hz / sampleRate;
     const cos = Math.cos(omega);
     const alpha = Math.sin(omega) / (2 * q);
     this.b0 = (1 - cos) / (2 * (1 + alpha));
@@ -96,24 +99,27 @@ class LowPass {
 }
 
 class AudioDemodulator {
-  constructor(mode, offsetHz) {
+  constructor(mode, offsetHz, sampleRate) {
+    this.sampleRate = sampleRate;
+    this.decimation = sampleRate >= 31250 ? 2 : 1;
+    this.audioRate = sampleRate / this.decimation;
     this.mode = mode;
     this.side = mode === 'USB' ? 1 : mode === 'LSB' ? -1 : 0;
-    const bandwidth = this.side ? 1500 : mode === 'NFM' ? 6500 : 5000;
-    this.stepHz = 2 * Math.PI * (offsetHz + this.side * 1700) / IQ_RATE;
-    this.sideHz = 2 * Math.PI * this.side * 1700 / IQ_RATE;
-    this.filtersI = [new LowPass(bandwidth, 0.541196), new LowPass(bandwidth, 1.306563)];
-    this.filtersQ = [new LowPass(bandwidth, 0.541196), new LowPass(bandwidth, 1.306563)];
-    this.audioFilter = new LowPass(mode === 'NFM' ? 3400 : 5000);
-    this.dcAlpha = 1 - Math.exp(-2 * Math.PI * 105 / IQ_RATE);
+    const bandwidth = this.side ? 1500 : mode === 'NFM' ? Math.min(6500, sampleRate * 0.32) : 5000;
+    this.stepHz = 2 * Math.PI * (offsetHz + this.side * 1700) / sampleRate;
+    this.sideHz = 2 * Math.PI * this.side * 1700 / sampleRate;
+    this.filtersI = [new LowPass(bandwidth, sampleRate, 0.541196), new LowPass(bandwidth, sampleRate, 1.306563)];
+    this.filtersQ = [new LowPass(bandwidth, sampleRate, 0.541196), new LowPass(bandwidth, sampleRate, 1.306563)];
+    this.audioFilter = new LowPass(mode === 'NFM' ? 3400 : 5000, sampleRate);
+    this.dcAlpha = 1 - Math.exp(-2 * Math.PI * 105 / sampleRate);
     this.osc = this.bfo = this.dc = 0;
     this.prevI = this.prevQ = 0;
     this.level = 0.01;
-    this.decimate = false;
+    this.phase = 0;
   }
 
   process(i, q) {
-    const samples = new Float32Array(Math.ceil(i.length / 2));
+    const samples = new Float32Array(Math.ceil(i.length / this.decimation));
     let length = 0;
     for (let k = 0; k < i.length; k++) {
       const cos = Math.cos(this.osc), sin = Math.sin(this.osc);
@@ -123,7 +129,7 @@ class AudioDemodulator {
       let audio;
       if (this.mode === 'NFM') {
         audio = Math.atan2(im * this.prevI - re * this.prevQ, re * this.prevI + im * this.prevQ)
-          * IQ_RATE / (2 * Math.PI * 2500);
+          * this.sampleRate / (2 * Math.PI * 2500);
         this.prevI = re;
         this.prevQ = im;
       } else if (this.mode === 'AM') {
@@ -140,13 +146,13 @@ class AudioDemodulator {
       } else {
         audio *= 0.5;
       }
-      this.decimate = !this.decimate;
-      if (this.decimate) samples[length++] = Math.max(-1, Math.min(1, audio));
+      if (this.phase === 0) samples[length++] = Math.max(-1, Math.min(1, audio));
+      this.phase = (this.phase + 1) % this.decimation;
     }
     return samples.subarray(0, length);
   }
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = {StreamDecoder, AudioDemodulator, requestFrame, IQ_RATE, AUDIO_RATE};
+  module.exports = {StreamDecoder, AudioDemodulator, requestFrame, STREAM_PROFILES};
 }

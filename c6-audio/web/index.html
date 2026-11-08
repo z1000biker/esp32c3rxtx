@@ -30,7 +30,7 @@
   </div></div>
   <div class="main">
     <div class="display panel">
-      <div class="scopeWrap"><canvas id="spectrum" width="1400" height="305"></canvas><div class="freqline"></div>
+      <div class="scopeWrap"><canvas id="spectrum" width="1400" height="305"></canvas><div id="tunedMarker" class="freqline"></div>
         <canvas id="waterfall" width="1400" height="240"></canvas></div>
       <div class="axis"><span id="leftFreq">—</span><span id="spanText">Span —</span><span id="rightFreq">—</span></div>
       <p class="small">Use the C6 Audio RX firmware and tune to an analog transmission within the 2.4 GHz band.</p>
@@ -42,6 +42,11 @@
         <div class="field"><label for="zoomText">Zoom factor</label><input id="zoomText" type="text" value="1×" readonly></div>
         <div class="field"><label for="mode">Demodulation</label><select id="mode">
           <option value="NFM">Narrow FM</option><option>AM</option><option>USB</option><option>LSB</option>
+        </select></div>
+        <div class="field"><label for="profile">USB I/Q rate</label><select id="profile">
+          <option value="low">15.625 kS/s · 8-bit</option>
+          <option value="medium">31.25 kS/s · 8-bit</option>
+          <option value="wide">62.5 kS/s · 16-bit</option>
         </select></div>
         <div class="field"><label for="volume">Volume</label><input id="volume" type="range" min="0" max="100" value="65"></div>
         <div class="field"><label for="avg">Averaging</label><input id="avg" type="number" min="1" max="32" step="1" value="4"></div>

@@ -4,7 +4,8 @@ const $ = (id) => document.getElementById(id);
 const FFTN = 2048;
 const INFO = 1, MODE = 2, FREQUENCY = 3, RATE = 4, FORMAT = 8, DIGITAL_GAIN = 13;
 let port, waiter, demod, audio, volume, audioAt, pcmNodes = new Set();
-let avgMag, peakMag, frame = 0, expectedIndex, gaps = 0, lastIqAt = 0;
+let avgMag, peakMag, frame = 0, expectedIndex, gaps = 0, lostSamples = 0n, lastIqAt = 0;
+let profile = STREAM_PROFILES.low;
 let ready = false, receiving = false, busy = false, centerHz = 2442000000, offsetHz = 0;
 const decoder = new TextDecoder();
 
@@ -20,10 +21,14 @@ function render() {
   $('live').disabled = !ready || busy || receiving;
   $('stop').disabled = !receiving || busy;
   $('freq').disabled = receiving || busy;
+  $('profile').disabled = receiving || busy;
   $('stateCard').textContent = receiving ? 'AUDIO RX' : 'IDLE';
-  $('statCard').textContent = frame + ' blocks · ' + gaps + ' gaps';
+  $('statCard').textContent = frame + ' blocks · ' + gaps + ' gaps · ' + lostSamples + ' lost samples';
   const zoom = Number($('zoom').value) || 1;
-  const span = IQ_RATE / zoom;
+  const span = profile.rate / zoom;
+  const marker = 50 + 100 * offsetHz / span;
+  $('tunedMarker').style.left = marker + '%';
+  $('tunedMarker').hidden = marker < 0 || marker > 100;
   $('leftFreq').textContent = ((centerHz - span / 2) / 1e6).toFixed(6);
   $('rightFreq').textContent = ((centerHz + span / 2) / 1e6).toFixed(6) + ' MHz';
   $('spanText').textContent = 'Span ' + (span / 1000).toFixed(2) + ' kHz';
@@ -94,11 +99,11 @@ async function prepareAudio() {
 function queueAudio(samples) {
   if (!samples.length || audio.state !== 'running') return;
   const now = audio.currentTime;
-  if (audioAt < now || audioAt > now + 0.24) {
+  if (audioAt < now || audioAt > now + 0.55) {
     clearAudio();
-    audioAt = now + 0.08;
+    audioAt = now + 0.15;
   }
-  const pcm = audio.createBuffer(1, samples.length, AUDIO_RATE);
+  const pcm = audio.createBuffer(1, samples.length, demod.audioRate);
   pcm.copyToChannel(samples, 0);
   const node = audio.createBufferSource();
   node.buffer = pcm;
@@ -112,11 +117,13 @@ function queueAudio(samples) {
   audioAt += pcm.duration;
 }
 
-function onIq(i, q, index, flags) {
+function onIq(i, q, index) {
   if (!receiving) return;
-  if (expectedIndex !== undefined && (index !== expectedIndex || (flags & 3))) {
+  // A queue-full flag may be set even if the host drained it before any samples were lost.
+  if (expectedIndex !== undefined && index !== expectedIndex) {
     gaps++;
-    demod = new AudioDemodulator($('mode').value, offsetHz);
+    if (index > expectedIndex) lostSamples += index - expectedIndex;
+    demod = new AudioDemodulator($('mode').value, offsetHz, profile.rate);
   }
   expectedIndex = index + BigInt(i.length);
   lastIqAt = performance.now();
@@ -186,18 +193,22 @@ async function start() {
     throw Error('Enter the analog signal frequency in MHz (2400–2500)');
   }
   await prepareAudio();
-  centerHz = Math.round((signalHz - 12000) / 1000) * 1000;
-  if (centerHz < 2400000000) centerHz = Math.round((signalHz + 12000) / 1000) * 1000;
+  profile = STREAM_PROFILES[$('profile').value] ?? STREAM_PROFILES.low;
+  centerHz = Math.round((signalHz - profile.tuningOffset) / 1000) * 1000;
+  if (centerHz < 2400000000) {
+    centerHz = Math.round((signalHz + profile.tuningOffset) / 1000) * 1000;
+  }
   offsetHz = signalHz - centerHz;
   await request(MODE, {value: 0});
   await request(FREQUENCY, {body: integerPayload(centerHz, 8)});
-  await request(RATE, {body: integerPayload(IQ_RATE, 4)});
-  await request(FORMAT, {value: 16});
-  await request(DIGITAL_GAIN, {value: 12});
+  await request(RATE, {body: integerPayload(profile.rate, 4)});
+  await request(FORMAT, {value: profile.bits});
+  await request(DIGITAL_GAIN, {value: profile.gain});
   expectedIndex = undefined;
   frame = gaps = 0;
+  lostSamples = 0n;
   avgMag = peakMag = null;
-  demod = new AudioDemodulator($('mode').value, offsetHz);
+  demod = new AudioDemodulator($('mode').value, offsetHz, profile.rate);
   lastIqAt = performance.now();
   receiving = true;
   try { await request(MODE, {value: 1}); }
@@ -237,7 +248,7 @@ bind('connect', connect);
 bind('live', start);
 bind('stop', stop);
 $('mode').onchange = () => {
-  if (receiving) demod = new AudioDemodulator($('mode').value, offsetHz);
+  if (receiving) demod = new AudioDemodulator($('mode').value, offsetHz, profile.rate);
 };
 $('volume').oninput = () => {
   if (volume) volume.gain.setTargetAtTime(Number($('volume').value) / 100, audio.currentTime, 0.01);
